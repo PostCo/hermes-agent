@@ -3901,6 +3901,10 @@ class PluginManager:
         to_load: Dict[str, PluginManifest] = {}
         for manifest in winners.values():
             lookup_key = manifest.key or manifest.name
+            is_explicitly_enabled = (
+                enabled is not None
+                and (lookup_key in enabled or manifest.name in enabled)
+            )
 
             # Explicit disable always wins (matches on key or on legacy
             # bare name for back-compat with existing user configs).
@@ -3958,21 +3962,24 @@ class PluginManager:
             # gateway platform. Instead we register a cheap deferred loader in
             # the platform_registry keyed on the platform name; the real module
             # is imported only when the gateway / cron / setup / send_message
-            # path actually asks for that platform. Every platform Hermes ships
-            # remains available out of the box — it just loads on first use.
+            # path actually asks for that platform. An explicitly enabled
+            # platform is the exception: hybrid plugins such as A2A also export
+            # ordinary CLI tools from register(), so deferring them would make
+            # their configured toolset permanently empty in chat sessions.
+            # Explicit opt-in therefore loads that one plugin eagerly; all other
+            # bundled platforms remain lazy.
             if manifest.source == "bundled" and manifest.kind == "platform":
-                self._register_deferred_platform(manifest)
+                if is_explicitly_enabled:
+                    to_load[lookup_key] = manifest
+                else:
+                    self._register_deferred_platform(manifest)
                 continue
 
             # Everything else (standalone, user-installed backends,
             # entry-point plugins) is opt-in via plugins.enabled.
             # Accept both the path-derived key and the legacy bare name
             # so existing configs keep working.
-            is_enabled = (
-                enabled is not None
-                and (lookup_key in enabled or manifest.name in enabled)
-            )
-            if not is_enabled:
+            if not is_explicitly_enabled:
                 loaded = LoadedPlugin(manifest=manifest, enabled=False)
                 loaded.error = (
                     "not enabled in config (run `hermes plugins enable {}` to activate)"
@@ -4068,8 +4075,17 @@ class PluginManager:
         )
         logger.debug("  bundled (top-level): %d manifest(s)", len(bundled))
         manifests.extend(bundled)
-        bundled_platforms = self._scan_directory(
-            repo_plugins / "platforms", source="bundled"
+        # Preserve the category prefix so runtime keys match the canonical
+        # identifiers written by `hermes plugins enable` / `disable`
+        # (for example `platforms/a2a`, not the manifest name
+        # `a2a-platform`). Legacy manifest-name entries remain accepted by
+        # the enable/disable checks below.
+        bundled_platforms = self._scan_directory_level(
+            repo_plugins / "platforms",
+            source="bundled",
+            skip_names=None,
+            prefix="platforms",
+            depth=1,
         )
         logger.debug("  bundled/platforms: %d manifest(s)", len(bundled_platforms))
         manifests.extend(bundled_platforms)

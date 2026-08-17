@@ -24,9 +24,21 @@ gateway:
 a2a_agents:
   researcher:
     url: "http://localhost:9999"
+    # Optional when the card is not at the standard path derived from url.
+    card_url: "http://localhost:9999/.well-known/agent-card.json"
     auth: { type: bearer, token: "sk-..." }
     timeout: 120
     capabilities: [web_search, research]
+
+  # Mastra currently exposes a v1 payload with its legacy JSON-RPC method
+  # names and an agent-specific discovery route.
+  tapir-support:
+    url: "http://127.0.0.1:4111/api/a2a/tapir-support"
+    card_url: "http://127.0.0.1:4111/api/.well-known/tapir-support/agent-card.json"
+    auth: { type: bearer, token: "${env:MASTRA_A2A_HERMES_TOKEN}" }
+    method_style: mastra
+    timeout: 600
+    capabilities: [project-tapir, code-investigation, readonly-production-data]
 ```
 
 ## Outbound — call other agents
@@ -34,7 +46,9 @@ a2a_agents:
 The agent gets five tools:
 
 - `a2a_discover(url)` — what can this agent do?
-- `a2a_call(agent, message, context_id?)` — send it a task, get the reply.
+- `a2a_call(agent, message, context_id?, task_id?)` — send it a task, get the
+  reply. Reuse both returned IDs when continuing a task in `input-required`;
+  Hermes also remembers the active task ID when only its context is supplied.
 - `a2a_list()` — configured peers, saved conversations, metrics.
 - `a2a_history(context_id)` — recall a saved A2A conversation.
 - `a2a_orchestrate(capability, message, mode?)` — fan-out a task to every

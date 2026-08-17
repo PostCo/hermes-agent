@@ -451,6 +451,19 @@ class TestPersistence:
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         assert "No persisted conversation" in tools.a2a_history({"context_id": "ghost"})
 
+    def test_only_input_required_task_is_resumable(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        protocol.persist_message(
+            "ctx-q", "agent", "Which shop?", "task-1",
+            peer="tapir-support", state=protocol.STATE_INPUT_REQUIRED,
+        )
+        assert protocol.resumable_task_id("ctx-q", "tapir-support") == "task-1"
+        protocol.persist_message(
+            "ctx-q", "agent", "Done", "task-1",
+            peer="tapir-support", state=protocol.STATE_COMPLETED,
+        )
+        assert protocol.resumable_task_id("ctx-q", "tapir-support") == ""
+
 
 # --------------------------------------------------------------------------
 # Client tools (HTTP mocked)
@@ -528,6 +541,200 @@ class TestClientTools:
         assert "Which repo?" in out
         assert "input-required" in out
         assert "ctx-q" in out
+        assert "task t" in out
+        assert "task_id 't'" in out
+
+    def test_mastra_peer_uses_explicit_card_url_and_legacy_method(self, monkeypatch):
+        posted = {}
+        card_url = "http://localhost:4111/api/.well-known/tapir-support/agent-card.json"
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {
+            "tapir-support": {
+                "url": "http://localhost:4111/api/a2a/tapir-support",
+                "card_url": card_url,
+                "method_style": "mastra",
+            }
+        }})
+
+        def fake_get(url, headers, timeout):
+            assert url == card_url
+            return protocol.build_agent_card(
+                name="tapir-support",
+                url="http://localhost:4111/api/a2a/tapir-support",
+                description="support",
+            )
+
+        def fake_post(url, body, headers, timeout):
+            posted["url"] = url
+            posted["body"] = body
+            return protocol.jsonrpc_result(body["id"], {"task": protocol.build_task(
+                "task-mastra", body["params"]["message"]["contextId"],
+                protocol.STATE_COMPLETED, "verified",
+            )})
+
+        monkeypatch.setattr(tools, "_http_get_json", fake_get)
+        monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        out = tools.a2a_call({"agent": "tapir-support", "message": "check return 42"})
+        assert "verified" in out
+        assert posted["url"] == "http://localhost:4111/api/a2a/tapir-support"
+        assert posted["body"]["method"] == "message/send"
+        assert posted["body"]["params"]["configuration"] == {
+            "returnImmediately": True,
+        }
+
+    def test_mastra_peer_polls_same_task_until_completed(self, monkeypatch):
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {
+            "tapir-support": {
+                "url": "http://localhost:4111/api/a2a/tapir-support",
+                "method_style": "mastra",
+                "timeout": 30,
+            }
+        }})
+        monkeypatch.setattr(tools, "_http_get_json", lambda url, h, t: None)
+        monkeypatch.setitem(
+            tools.__dict__,
+            "time",
+            SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _seconds: None),
+        )
+        posted = []
+
+        def fake_post(url, body, headers, timeout):
+            posted.append(body)
+            if body["method"] == "message/send":
+                assert body["params"]["configuration"] == {
+                    "returnImmediately": True,
+                }
+                task = protocol.build_task(
+                    "task-long", body["params"]["message"]["contextId"],
+                    protocol.STATE_WORKING, "Generating response...",
+                )
+            elif len(posted) == 2:
+                assert body["method"] == "tasks/get"
+                assert body["params"] == {"id": "task-long"}
+                task = protocol.build_task(
+                    "task-long", "ctx-long", protocol.STATE_WORKING,
+                    "Still investigating...",
+                )
+            else:
+                assert body["method"] == "tasks/get"
+                assert body["params"] == {"id": "task-long"}
+                task = protocol.build_task(
+                    "task-long", "ctx-long", protocol.STATE_COMPLETED,
+                    "Verified production evidence",
+                )
+            return protocol.jsonrpc_result(body["id"], task)
+
+        monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        out = tools.a2a_call({
+            "agent": "tapir-support",
+            "message": "investigate a slow return",
+            "context_id": "ctx-long",
+        })
+
+        assert "Verified production evidence" in out
+        assert "task task-long" in out
+        assert [body["method"] for body in posted] == [
+            "message/send", "tasks/get", "tasks/get",
+        ]
+        assert all(
+            body["method"] != "message/send" for body in posted[1:]
+        )
+
+    def test_mastra_poll_retries_transient_gateway_timeout(self, monkeypatch):
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {
+            "tapir-support": {
+                "url": "http://localhost:4111/api/a2a/tapir-support",
+                "method_style": "mastra",
+                "timeout": 30,
+            }
+        }})
+        monkeypatch.setattr(tools, "_http_get_json", lambda url, h, t: None)
+        monkeypatch.setitem(
+            tools.__dict__,
+            "time",
+            SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _seconds: None),
+        )
+        methods = []
+
+        def fake_post(url, body, headers, timeout):
+            methods.append(body["method"])
+            if body["method"] == "message/send":
+                return protocol.jsonrpc_result(body["id"], protocol.build_task(
+                    "task-retry", "ctx-retry", protocol.STATE_WORKING,
+                ))
+            if methods.count("tasks/get") == 1:
+                raise urllib.error.HTTPError(url, 504, "Gateway Timeout", {}, None)
+            return protocol.jsonrpc_result(body["id"], protocol.build_task(
+                "task-retry", "ctx-retry", protocol.STATE_COMPLETED, "Recovered",
+            ))
+
+        monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        out = tools.a2a_call({"agent": "tapir-support", "message": "slow check"})
+
+        assert "Recovered" in out
+        assert methods == ["message/send", "tasks/get", "tasks/get"]
+
+    def test_mastra_poll_timeout_preserves_task_identity(self, monkeypatch):
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {
+            "tapir-support": {
+                "url": "http://localhost:4111/api/a2a/tapir-support",
+                "method_style": "mastra",
+                "timeout": 1,
+            }
+        }})
+        monkeypatch.setattr(tools, "_http_get_json", lambda url, h, t: None)
+        ticks = iter([0.0, 2.0])
+        monkeypatch.setitem(
+            tools.__dict__,
+            "time",
+            SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _seconds: None),
+        )
+
+        def fake_post(url, body, headers, timeout):
+            return protocol.jsonrpc_result(body["id"], protocol.build_task(
+                "task-timeout", "ctx-timeout", protocol.STATE_WORKING,
+            ))
+
+        monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        out = tools.a2a_call({"agent": "tapir-support", "message": "slow check"})
+
+        assert "timed out waiting" in out.lower()
+        assert "task-timeout" in out
+        assert "ctx-timeout" in out
+
+    def test_follow_up_resumes_input_required_task(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {
+            "tapir-support": {"url": "http://localhost:4111/api/a2a/tapir-support"}
+        }})
+        monkeypatch.setattr(tools, "_http_get_json", lambda url, h, t: None)
+        posted = []
+
+        def fake_post(url, body, headers, timeout):
+            posted.append(body)
+            message = body["params"]["message"]
+            if len(posted) == 1:
+                task = protocol.build_task(
+                    "task-q", message["contextId"],
+                    protocol.STATE_INPUT_REQUIRED, "Which shop?",
+                )
+            else:
+                task = protocol.build_task(
+                    "task-q", message["contextId"],
+                    protocol.STATE_COMPLETED, "Shop 7 is verified",
+                )
+            return protocol.jsonrpc_result(body["id"], {"task": task})
+
+        monkeypatch.setattr(tools, "_http_post_json", fake_post)
+        first = tools.a2a_call({
+            "agent": "tapir-support", "message": "check settings", "context_id": "ctx-q",
+        })
+        assert "input-required" in first
+        second = tools.a2a_call({
+            "agent": "tapir-support", "message": "Shop 7", "context_id": "ctx-q",
+        })
+        assert "verified" in second
+        assert "taskId" not in posted[0]["params"]["message"]
+        assert posted[1]["params"]["message"]["taskId"] == "task-q"
 
     def test_rpc_url_prefers_supported_interfaces(self):
         card = {
@@ -1405,7 +1612,7 @@ class TestClientTenantAndDiscovery:
 
         monkeypatch.setattr(tools, "_http_get_json", fake_get)
         monkeypatch.setattr(tools, "_http_post_json", fake_post)
-        reply, _ctx, _state = tools._send_task(
+        reply, _ctx, _state, _task_id = tools._send_task(
             "dev", {"url": "http://peer.example", "auth": {}, "timeout": 5}, "hello", "ctx-1"
         )
         assert reply == "ok"
@@ -1477,10 +1684,11 @@ class TestV1SpecRegressionFixes:
 
         monkeypatch.setattr(tools, "_http_get_json", fake_get)
         monkeypatch.setattr(tools, "_http_post_json", fake_post)
-        reply, _ctx, state = tools._send_task(
+        reply, _ctx, state, task_id = tools._send_task(
             "dev", {"url": "http://peer.example", "auth": {}, "timeout": 5}, "hello", "ctx-1")
         assert reply == "ok"
         assert state == protocol.STATE_COMPLETED
+        assert task_id == "task-1"
         assert posted["body"]["method"] == "SendMessage"
         assert posted["body"]["params"]["tenant"] == "dev-team"
 
