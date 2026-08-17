@@ -19,10 +19,11 @@ must not touch core files.** A2A now lives entirely under
 ### Outbound — client tools (`a2a` toolset)
 - `a2a_discover(url)` — fetch + summarize a peer's Agent Card (v1.0
   `supportedInterfaces` aware, tolerates 0.3 cards).
-- `a2a_call(agent, message, context_id?)` — send a JSON-RPC `message/send`
-  task to a peer, return the reply. Multi-turn via `context_id` (carried
-  inside the Message per v1.0). Surfaces `TASK_STATE_INPUT_REQUIRED` so the
-  model knows to answer and continue the context.
+- `a2a_call(agent, message, context_id?, task_id?)` — send a JSON-RPC
+  `SendMessage` task to a peer, return the reply. Multi-turn conversation
+  context uses `context_id`; an `input-required` continuation also reuses its
+  server `task_id`. Both are persisted, so Hermes can infer the resumable task
+  from a supplied context after compaction or restart.
 - `a2a_list()` — configured peers + persisted conversations + metrics.
 - `a2a_history(context_id, limit?)` — recall a persisted conversation
   (this is the production consumer of the persistence layer).
@@ -32,7 +33,11 @@ must not touch core files.** A2A now lives entirely under
   coarse heuristic; errors never win, and an all-error fan-out reports the
   failures instead of picking one).
 
-Peers resolved from `config.yaml` → `a2a_agents`, or a direct URL.
+Peers resolved from `config.yaml` → `a2a_agents`, or a direct URL. Configured
+peers may provide an explicit `card_url` for framework-specific discovery
+paths. `method_style: mastra` selects Mastra's lowercase `message/send` method
+while retaining the v1 payload and `A2A-Version: 1.0` header; the default is
+the v1.0 `SendMessage` method.
 
 ### Inbound — platform adapter
 - Stdlib `http.server` on a daemon thread (no asyncio loop needed at

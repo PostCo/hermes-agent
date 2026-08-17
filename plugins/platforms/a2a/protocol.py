@@ -258,7 +258,7 @@ def data_part(data: Any, media_type: str = "application/json") -> dict:
     return {"data": data, "mediaType": media_type}
 
 
-def text_message(role: str, text: str, context_id: str = "") -> dict:
+def text_message(role: str, text: str, context_id: str = "", task_id: str = "") -> dict:
     """Build an A2A v1.0 Message with a single text Part."""
     msg: dict[str, Any] = {
         "role": role,  # ROLE_USER | ROLE_AGENT
@@ -267,6 +267,8 @@ def text_message(role: str, text: str, context_id: str = "") -> dict:
     }
     if context_id:
         msg["contextId"] = context_id
+    if task_id:
+        msg["taskId"] = task_id
     return msg
 
 
@@ -801,12 +803,24 @@ def _safe_name(context_id: str) -> str:
     return "".join(c for c in (context_id or "default") if c.isalnum() or c in "-_") or "default"
 
 
-def persist_message(context_id: str, role: str, text: str, task_id: str = "") -> None:
+def persist_message(
+    context_id: str,
+    role: str,
+    text: str,
+    task_id: str = "",
+    *,
+    peer: str = "",
+    state: str = "",
+) -> None:
     """Append one message to the context's on-disk conversation log."""
     try:
         d = _conv_dir()
         d.mkdir(parents=True, exist_ok=True)
         rec = {"ts": time.time(), "role": role, "text": text, "task_id": task_id}
+        if peer:
+            rec["peer"] = peer
+        if state:
+            rec["state"] = state
         with (d / f"{_safe_name(context_id)}.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
@@ -832,6 +846,24 @@ def load_conversation(context_id: str, limit: int = 50) -> list[dict]:
     except Exception:
         return []
     return out[-limit:]
+
+
+def resumable_task_id(context_id: str, peer: str = "") -> str:
+    """Return the latest input-required task for a context and peer.
+
+    Completed and failed tasks are deliberately not reused: a normal follow-up
+    starts a new task inside the existing context.
+    """
+    for message in reversed(load_conversation(context_id)):
+        if message.get("role") != "agent":
+            continue
+        if peer and message.get("peer") not in (None, "", peer):
+            continue
+        if message.get("state") == STATE_INPUT_REQUIRED:
+            return str(message.get("task_id") or "")
+        if message.get("state"):
+            return ""
+    return ""
 
 
 def list_conversations() -> list[str]:

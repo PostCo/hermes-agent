@@ -120,6 +120,105 @@ def _make_plugin_dir(base: Path, name: str, *, register_body: str = "pass",
 class TestPluginDiscovery:
     """Tests for plugin discovery from directories and entry points."""
 
+    def test_bundled_platform_key_matches_plugins_cli_identifier(
+        self, tmp_path, monkeypatch
+    ):
+        from hermes_cli import plugins as plugins_mod
+
+        bundled = tmp_path / "bundled"
+        platform = bundled / "platforms" / "hybrid"
+        platform.mkdir(parents=True)
+        (platform / "plugin.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "hybrid-platform",
+                    "kind": "platform",
+                    "version": "1.0.0",
+                }
+            )
+        )
+        (platform / "__init__.py").write_text("def register(ctx):\n    pass\n")
+        monkeypatch.setattr(
+            plugins_mod, "get_bundled_plugins_dir", lambda: bundled
+        )
+
+        manifests = PluginManager()._collect_directory_manifests()
+
+        assert [(manifest.name, manifest.key) for manifest in manifests] == [
+            ("hybrid-platform", "platforms/hybrid")
+        ]
+
+    def test_explicitly_enabled_bundled_platform_loads_cli_tools_eagerly(
+        self, monkeypatch
+    ):
+        """Hybrid platform plugins need register() during chat startup.
+
+        A2A owns both a gateway adapter and outbound CLI tools. Leaving an
+        explicitly enabled A2A manifest deferred makes the `a2a` toolset empty
+        because a CLI chat never asks the platform registry for an adapter.
+        """
+        manifest = PluginManifest(
+            name="hybrid-platform",
+            key="platforms/hybrid",
+            source="bundled",
+            kind="platform",
+            path="unused",
+        )
+        manager = PluginManager()
+        loaded = []
+        deferred = []
+        monkeypatch.setattr(
+            manager, "_collect_directory_manifests", lambda: [manifest]
+        )
+        monkeypatch.setattr(manager, "_scan_entry_points", lambda: [])
+        monkeypatch.setattr(manager, "_load_plugin", loaded.append)
+        monkeypatch.setattr(
+            manager, "_register_deferred_platform", deferred.append
+        )
+        monkeypatch.setattr(
+            "hermes_cli.plugins._get_enabled_plugins",
+            lambda: {"platforms/hybrid"},
+        )
+        monkeypatch.setattr(
+            "hermes_cli.plugins._get_disabled_plugins", lambda: set()
+        )
+
+        manager._discover_and_load_inner()
+
+        assert loaded == [manifest]
+        assert deferred == []
+
+    def test_unenabled_bundled_platform_remains_deferred(self, monkeypatch):
+        manifest = PluginManifest(
+            name="lazy-platform",
+            key="platforms/lazy",
+            source="bundled",
+            kind="platform",
+            path="unused",
+        )
+        manager = PluginManager()
+        loaded = []
+        deferred = []
+        monkeypatch.setattr(
+            manager, "_collect_directory_manifests", lambda: [manifest]
+        )
+        monkeypatch.setattr(manager, "_scan_entry_points", lambda: [])
+        monkeypatch.setattr(manager, "_load_plugin", loaded.append)
+        monkeypatch.setattr(
+            manager, "_register_deferred_platform", deferred.append
+        )
+        monkeypatch.setattr(
+            "hermes_cli.plugins._get_enabled_plugins", lambda: set()
+        )
+        monkeypatch.setattr(
+            "hermes_cli.plugins._get_disabled_plugins", lambda: set()
+        )
+
+        manager._discover_and_load_inner()
+
+        assert loaded == []
+        assert deferred == [manifest]
+
     def test_enabled_portable_plugin_registers_components(
         self, tmp_path, monkeypatch
     ):
