@@ -118,6 +118,17 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
             "monitors, incremental digests). First run is unchanged."
         ),
     )
+    cron_create.add_argument(
+        "--toolset",
+        dest="enabled_toolsets",
+        action="append",
+        help="Restrict the job to this toolset. Repeat to add multiple toolsets.",
+    )
+    cron_create.add_argument(
+        "--paused",
+        action="store_true",
+        help="Create the job, then leave it paused until explicitly resumed.",
+    )
 
     # cron edit
     cron_edit = cron_subparsers.add_parser(
@@ -230,6 +241,17 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         "--provider",
         dest="model_provider",
         help="Inference provider paired with --model. Pass empty string to clear.",
+    )
+    cron_edit.add_argument(
+        "--toolset",
+        dest="enabled_toolsets",
+        action="append",
+        help="Replace the job's toolsets with this set. Repeat to add multiple toolsets.",
+    )
+    cron_edit.add_argument(
+        "--clear-toolsets",
+        action="store_true",
+        help="Remove the per-job toolset restriction.",
     )
 
     # lifecycle actions

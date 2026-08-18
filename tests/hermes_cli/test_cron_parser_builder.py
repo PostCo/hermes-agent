@@ -48,3 +48,19 @@ def test_cron_accept_hooks_flag_on_run_and_tick():
     assert ns.accept_hooks is True
     ns2 = parser.parse_args(["cron", "tick", "--accept-hooks"])
     assert ns2.accept_hooks is True
+
+
+def test_cron_create_and_edit_toolset_options():
+    parser = _build()
+    created = parser.parse_args([
+        "cron", "create", "30m", "task", "--toolset", "terminal",
+        "--toolset", "a2a", "--paused",
+    ])
+    assert created.enabled_toolsets == ["terminal", "a2a"]
+    assert created.paused is True
+
+    edited = parser.parse_args([
+        "cron", "edit", "j", "--toolset", "file", "--toolset", "skills",
+    ])
+    assert edited.enabled_toolsets == ["file", "skills"]
+    assert edited.clear_toolsets is False

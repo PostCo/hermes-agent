@@ -128,6 +128,51 @@ class TestCronCommandLifecycle:
         assert jobs[0]["skills"] == ["blogwatcher", "maps"]
         assert jobs[0]["name"] == "Skill combo"
 
+    def test_create_paused_with_restricted_toolsets(self, tmp_cron_dir, capsys):
+        cron_command(
+            Namespace(
+                cron_command="create",
+                schedule="every 1h",
+                prompt="Investigate support request",
+                name="Paused investigator",
+                deliver=None,
+                repeat=None,
+                skill=None,
+                skills=None,
+                script=None,
+                workdir=None,
+                no_agent=False,
+                enabled_toolsets=["terminal", "a2a"],
+                paused=True,
+            )
+        )
+
+        job = list_jobs(include_disabled=True)[0]
+        assert job["enabled"] is False
+        assert job["state"] == "paused"
+        assert job["enabled_toolsets"] == ["terminal", "a2a"]
+        assert "State: paused" in capsys.readouterr().out
+
+    def test_edit_replaces_and_clears_toolsets(self, tmp_cron_dir, capsys):
+        job = create_job(
+            prompt="Investigate",
+            schedule="every 1h",
+            enabled_toolsets=["terminal"],
+        )
+        parser = argparse.ArgumentParser(prog="hermes")
+        subparsers = parser.add_subparsers(dest="command")
+        build_cron_parser(subparsers, cmd_cron=cron_command)
+
+        cron_command(parser.parse_args([
+            "cron", "edit", job["id"], "--toolset", "a2a", "--toolset", "file",
+        ]))
+        assert get_job(job["id"])["enabled_toolsets"] == ["a2a", "file"]
+
+        cron_command(parser.parse_args([
+            "cron", "edit", job["id"], "--clear-toolsets",
+        ]))
+        assert get_job(job["id"])["enabled_toolsets"] is None
+
 
 
 class TestGatewayNotRunningWarning:
