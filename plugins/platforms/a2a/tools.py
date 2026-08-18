@@ -2,7 +2,7 @@
 A2A client tools — let the Hermes agent talk to *other* agents as a peer.
 
 Tools (registered in the ``a2a`` toolset):
-  - a2a_discover(url)         -> fetch + summarize a peer's Agent Card
+  - a2a_discover(agent|url)   -> fetch + summarize a peer's Agent Card
   - a2a_call(agent, message)  -> send a task to a peer, return its reply
   - a2a_list()                -> list configured peers + persisted conversations
   - a2a_history(context_id)   -> recall a persisted A2A conversation
@@ -365,22 +365,42 @@ def _reply_text_from_result(result: Any) -> str:
 # --------------------------------------------------------------------------
 
 def a2a_discover(args: dict, **_: Any) -> str:
-    """Fetch and summarize the Agent Card at ``url``."""
-    url = str(args.get("url") or "").strip()
-    if not url:
-        return "Error: 'url' is required (e.g. http://localhost:9999)."
+    """Fetch and summarize a configured peer's or public URL's Agent Card."""
+    target = str(
+        args.get("agent")
+        or args.get("agent_name")
+        or args.get("name")
+        or args.get("url")
+        or ""
+    ).strip()
+    if not target:
+        return (
+            "Error: 'agent' or 'url' is required "
+            "(e.g. researcher or http://localhost:9999)."
+        )
+
+    peer = _resolve_peer(target)
+    if not peer or not peer.get("url"):
+        return (
+            f"Error: unknown agent '{target}'. Configure it under 'a2a_agents' "
+            "in config.yaml or pass a full http(s):// URL."
+        )
+
+    headers = _auth_header(peer.get("auth", {}) or {})
+    timeout = int(peer.get("timeout", _DEFAULT_TIMEOUT))
     try:
-        card = _fetch_card(url, {}, _DEFAULT_TIMEOUT)
+        card = _fetch_peer_card(peer, headers, timeout)
     except urllib.error.HTTPError as e:
-        return f"Error: discovery failed — HTTP {e.code} from {url}."
+        return f"Error: discovery failed — HTTP {e.code} from {target}."
     except Exception as e:
-        return f"Error: could not reach {url} — {e}."
+        return f"Error: could not reach {target} — {e}."
 
     name = card.get("name", "?")
     desc = card.get("description", "")
     caps = card.get("capabilities", {}) or {}
     skills = card.get("skills", []) or []
-    auth = "yes" if card.get("security") else "no"
+    request_auth = "bearer" if headers.get("Authorization") else "none"
+    card_security = "yes" if card.get("security") else "no"
     ifaces = card.get("supportedInterfaces", []) or []
     proto = ", ".join(
         f"{i.get('protocolBinding', '?')} v{i.get('protocolVersion', '?')}"
@@ -389,9 +409,10 @@ def a2a_discover(args: dict, **_: Any) -> str:
     lines = [
         f"Agent: {name}",
         f"Description: {desc}",
-        f"URL: {_rpc_url(url, card)}",
+        f"URL: {_rpc_url(str(peer['url']), card)}",
         f"Protocol: {proto}",
-        f"Streaming: {bool(caps.get('streaming'))}  Push: {bool(caps.get('pushNotifications'))}  Auth required: {auth}",
+        f"Streaming: {bool(caps.get('streaming'))}  Push: {bool(caps.get('pushNotifications'))}  "
+        f"Request auth: {request_auth}  Card security declared: {card_security}",
         f"Skills ({len(skills)}):",
     ]
     for s in skills[:20]:
@@ -644,16 +665,27 @@ _SCHEMAS: dict[str, _ToolSchema] = {
         "function": {
             "name": "a2a_discover",
             "description": (
-                "Fetch and summarize another agent's A2A Agent Card from a URL "
-                "(its name, description, capabilities, and skills). Use this to "
-                "find out what a remote agent can do before calling it."
+                "Fetch and summarize another agent's A2A Agent Card "
+                "(its name, description, capabilities, and skills). Pass a "
+                "configured peer name to reuse its card URL, timeout, and "
+                "authentication, or pass a public URL directly."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "Base URL of the remote A2A agent, e.g. http://localhost:9999"},
+                    "agent": {
+                        "type": "string",
+                        "description": "Configured peer name from a2a_agents, e.g. researcher.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Public base URL of an unconfigured A2A agent, e.g. http://localhost:9999.",
+                    },
                 },
-                "required": ["url"],
+                "anyOf": [
+                    {"required": ["agent"]},
+                    {"required": ["url"]},
+                ],
             },
         },
     },

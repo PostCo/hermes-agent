@@ -1,7 +1,7 @@
 # PostCo Hermes setup
 
 This repository is PostCo's Hermes runtime. It carries the A2A compatibility
-needed for Hermes to call the Mastra `tapir-support` agent. The support
+needed for Hermes to call the Mastra `tapir-support-investigator` agent. The support
 workflow itself lives in
 [`PostCo/hermes-postco-support-agent`](https://github.com/PostCo/hermes-postco-support-agent).
 
@@ -88,18 +88,24 @@ platform_toolsets:
     - hermes-cli
 
 a2a_agents:
-  tapir-support:
-    url: https://mastra.example.com/api/a2a/tapir-support
-    card_url: https://mastra.example.com/api/.well-known/tapir-support/agent-card.json
+  tapir-investigator:
+    url: https://mastra.example.com/api/a2a/tapir-support-investigator
+    card_url: https://mastra.example.com/api/.well-known/tapir-support-investigator/agent-card.json
     auth:
       type: bearer
       token: ${env:MASTRA_A2A_HERMES_TOKEN}
-    timeout: 600
+    timeout: 1020
     method_style: mastra
     capabilities:
       - project-tapir
       - code-investigation
       - readonly-production-data
+
+agent:
+  gateway_timeout: 1800
+
+delegation:
+  child_timeout_seconds: 1200
 ```
 
 For a Mastra process on the same machine, `http://127.0.0.1:4111` may be used
@@ -114,10 +120,12 @@ Start a fresh profile session:
 postco-support
 ```
 
-Ask Hermes to call `tapir-support` with a harmless read-only request. Verify
-that the result reports a Mastra context ID and task ID and does not return an
-authentication error or HTTP 504. Then test with a representative support
-email. Enable the gateway and cron only after this smoke test passes.
+Ask Hermes to list its A2A peers and discover `tapir-investigator`; discovery
+must return the `Project Tapir Support Investigator` card through the configured
+bearer token. Then call `tapir-investigator` with a harmless read-only request.
+Verify that the result reports a Mastra context ID and task ID and does not
+return an authentication error or HTTP 504. Finally, test with a representative
+support email. Enable the gateway and cron only after this smoke test passes.
 
 ## Updating an existing machine
 
