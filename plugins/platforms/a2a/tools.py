@@ -41,6 +41,7 @@ _POLL_REQUEST_TIMEOUT = 30
 _POLL_INITIAL_DELAY = 1.0
 _POLL_MAX_DELAY = 5.0
 _TRANSIENT_GATEWAY_CODES = frozenset({502, 503, 504})
+_USER_AGENT = "Hermes-Agent-A2A/1.0"
 
 
 # --------------------------------------------------------------------------
@@ -85,15 +86,32 @@ def _auth_header(auth: dict) -> dict:
 # HTTP
 # --------------------------------------------------------------------------
 
+def _request_headers(headers: dict) -> dict:
+    """Add a stable client identity without allowing callers to override it."""
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() != "user-agent"
+    } | {"User-Agent": _USER_AGENT}
+
+
 def _http_get_json(url: str, headers: dict, timeout: int) -> dict:
-    req = urllib.request.Request(url, headers=headers, method="GET")
+    req = urllib.request.Request(
+        url,
+        headers=_request_headers(headers),
+        method="GET",
+    )
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (configured peers)
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _http_post_json(url: str, body: dict, headers: dict, timeout: int) -> dict:
     data = json.dumps(body).encode("utf-8")
-    hdrs = {"Content-Type": "application/json", "A2A-Version": protocol.PROTOCOL_VERSION, **headers}
+    hdrs = _request_headers({
+        "Content-Type": "application/json",
+        "A2A-Version": protocol.PROTOCOL_VERSION,
+        **headers,
+    })
     req = urllib.request.Request(url, data=data, headers=hdrs, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (configured peers)
         return json.loads(resp.read().decode("utf-8"))

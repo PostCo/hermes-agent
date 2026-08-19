@@ -470,6 +470,44 @@ class TestPersistence:
 # --------------------------------------------------------------------------
 
 class TestClientTools:
+    def test_http_helpers_send_stable_user_agent(self, monkeypatch):
+        captured = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b"{}"
+
+        def fake_urlopen(request, timeout):
+            captured.append((request, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr(tools.urllib.request, "urlopen", fake_urlopen)
+
+        tools._http_get_json(
+            "https://peer.example/.well-known/agent-card.json",
+            {"Authorization": "Bearer secret", "user-agent": "override"},
+            15,
+        )
+        tools._http_post_json(
+            "https://peer.example/a2a",
+            {"jsonrpc": "2.0"},
+            {"Authorization": "Bearer secret", "User-Agent": "override"},
+            30,
+        )
+
+        assert [request.get_header("User-agent") for request, _ in captured] == [
+            "Hermes-Agent-A2A/1.0",
+            "Hermes-Agent-A2A/1.0",
+        ]
+        assert [timeout for _, timeout in captured] == [15, 30]
+        assert captured[1][0].get_header("A2a-version") == protocol.PROTOCOL_VERSION
+
     def test_call_requires_args(self):
         assert "required" in tools.a2a_call({"agent": "", "message": "hi"})
         assert "required" in tools.a2a_call({"agent": "x", "message": ""})
