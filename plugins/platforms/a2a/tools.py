@@ -87,12 +87,16 @@ def _auth_header(auth: dict) -> dict:
 # --------------------------------------------------------------------------
 
 def _request_headers(headers: dict) -> dict:
-    """Add a stable client identity without allowing callers to override it."""
+    """Add stable A2A v1 request headers without allowing overrides."""
     return {
         key: value
         for key, value in headers.items()
-        if key.lower() != "user-agent"
-    } | {"User-Agent": _USER_AGENT}
+        if key.lower() not in {"user-agent", "accept", "a2a-version"}
+    } | {
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/json",
+        "A2A-Version": protocol.PROTOCOL_VERSION,
+    }
 
 
 def _http_get_json(url: str, headers: dict, timeout: int) -> dict:

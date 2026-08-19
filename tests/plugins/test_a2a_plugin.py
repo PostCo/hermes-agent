@@ -491,7 +491,12 @@ class TestClientTools:
 
         tools._http_get_json(
             "https://peer.example/.well-known/agent-card.json",
-            {"Authorization": "Bearer secret", "user-agent": "override"},
+            {
+                "Authorization": "Bearer secret",
+                "user-agent": "override",
+                "Accept": "text/html",
+                "a2a-version": "0.3",
+            },
             15,
         )
         tools._http_post_json(
@@ -505,8 +510,15 @@ class TestClientTools:
             "Hermes-Agent-A2A/1.0",
             "Hermes-Agent-A2A/1.0",
         ]
+        assert [request.get_header("Accept") for request, _ in captured] == [
+            "application/json",
+            "application/json",
+        ]
+        assert [request.get_header("A2a-version") for request, _ in captured] == [
+            protocol.PROTOCOL_VERSION,
+            protocol.PROTOCOL_VERSION,
+        ]
         assert [timeout for _, timeout in captured] == [15, 30]
-        assert captured[1][0].get_header("A2a-version") == protocol.PROTOCOL_VERSION
 
     def test_call_requires_args(self):
         assert "required" in tools.a2a_call({"agent": "", "message": "hi"})
