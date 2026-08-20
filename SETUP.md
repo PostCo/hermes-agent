@@ -1,7 +1,7 @@
 # PostCo Hermes setup
 
 This repository is PostCo's Hermes runtime. It carries the A2A compatibility
-needed for Hermes to call the Mastra `tapir-support` agent. The support
+needed for Hermes to call the Mastra support investigator. The support
 workflow itself lives in
 [`PostCo/hermes-postco-support-agent`](https://github.com/PostCo/hermes-postco-support-agent).
 
@@ -11,6 +11,7 @@ The commands below install both pieces without copying files between machines.
 
 - macOS or Linux
 - Git access to the PostCo repositories
+- `mise` (the support profile pins and provisions its Python with it)
 - The Mastra A2A HTTPS endpoint
 - `MASTRA_A2A_HERMES_TOKEN` from the team's secret manager
 - The model and support-workflow credentials listed in the profile repository
@@ -60,10 +61,11 @@ hermes profile alias postco-support
 This creates the `postco-support` command, equivalent to
 `hermes -p postco-support`.
 
-Follow the profile repository's `SETUP.md` to provision its ignored
-`config.yaml`, `.env`, Gmail, Sheets, and other credentials. Do not enable its
-mail cron job on a second machine unless that machine is intentionally taking
-over production mail processing.
+Follow the profile repository's `SETUP.md` from this point. Its `mise run
+setup`, Gmail OAuth, hosted Supabase MCP OAuth, model-provider setup, read-only
+smoke checks, and paused cron installer are the authoritative end-to-end flow.
+Do not enable its mail gate on a second machine unless that machine is
+intentionally taking over production mail processing.
 
 ### 3. Configure Mastra A2A
 
@@ -72,6 +74,7 @@ Put the bearer token in the profile's ignored environment file:
 ```dotenv
 # ~/.hermes/profiles/postco-support/.env
 MASTRA_A2A_HERMES_TOKEN=<retrieve-from-secret-manager>
+MASTRA_A2A_BASE_URL=https://mastra.example.com
 ```
 
 Merge the following into the profile's ignored `config.yaml`. Replace the two
@@ -88,23 +91,29 @@ platform_toolsets:
     - hermes-cli
 
 a2a_agents:
-  tapir-support:
-    url: https://mastra.example.com/api/a2a/tapir-support
-    card_url: https://mastra.example.com/api/.well-known/tapir-support/agent-card.json
+  postco-support-investigator:
+    url: ${env:MASTRA_A2A_BASE_URL}/api/a2a/tapir-support-investigator
+    card_url: ${env:MASTRA_A2A_BASE_URL}/api/.well-known/tapir-support-investigator/agent-card.json
     auth:
       type: bearer
       token: ${env:MASTRA_A2A_HERMES_TOKEN}
-    timeout: 600
+    timeout: 1020
     method_style: mastra
     capabilities:
       - project-tapir
       - code-investigation
       - readonly-production-data
+
+agent:
+  gateway_timeout: 1800
+
+delegation:
+  child_timeout_seconds: 1200
 ```
 
-For a Mastra process on the same machine, `http://127.0.0.1:4111` may be used
-instead. Across machines, use a private network address or HTTPS endpoint that
-the Hermes machine can reach.
+For a Mastra process on the same machine, set `MASTRA_A2A_BASE_URL` to
+`http://127.0.0.1:4111`. Across machines, use a private network address or
+HTTPS endpoint that the Hermes machine can reach. Do not add a trailing slash.
 
 ### 4. Verify before enabling mail
 
@@ -114,10 +123,12 @@ Start a fresh profile session:
 postco-support
 ```
 
-Ask Hermes to call `tapir-support` with a harmless read-only request. Verify
-that the result reports a Mastra context ID and task ID and does not return an
-authentication error or HTTP 504. Then test with a representative support
-email. Enable the gateway and cron only after this smoke test passes.
+Ask Hermes to list its A2A peers and discover `postco-support-investigator`; discovery
+must return the `Project Tapir Support Investigator` card through the configured
+bearer token. Then call `postco-support-investigator` with a harmless read-only request.
+Verify that the result reports a Mastra context ID and task ID and does not
+return an authentication error or HTTP 504. Finally, test with a representative
+support email. Enable the gateway and cron only after this smoke test passes.
 
 ## Updating an existing machine
 
@@ -130,11 +141,17 @@ hermes update
 
 # Support workflow, prompts, skills, and scripts.
 git -C "$HOME/.hermes/profiles/postco-support" pull --ff-only
+cd "$HOME/.hermes/profiles/postco-support"
+mise install
+mise run setup
+mise run check
+mise run cron-install
 ```
 
 After changing runtime code, profile configuration, prompts, or skills,
-restart the profile gateway and repeat the A2A smoke test before allowing the
-next mail run.
+restart the profile gateway and repeat the A2A smoke test. `cron-install`
+leaves the mail gate paused; explicitly resume `postco-mail-gate` only after
+review, and only on the designated production runner.
 
 Do not run the official installation command over this checkout. Do not point
 `origin` back to NousResearch. Upstream Hermes releases should first be merged

@@ -373,16 +373,13 @@ def _sanitize_env_file_if_needed(path: Path) -> None:
     to the errors=replace corruption path. Order of BOM checks matters:
     UTF-32-LE's BOM starts with UTF-16-LE's FF FE.
 
-    ``hermes_cli.config._sanitize_env_lines`` normalizes line endings while
-    treating content after the first ``=`` as opaque for boundary discovery.
+    Line normalization is deliberately implemented locally: importing
+    ``hermes_cli.config`` here would parse config.yaml before this function
+    has loaded the selected profile's dotenv, producing false missing-env
+    warnings for `${env:...}` references during every profile startup.
     """
     if not path.exists():
         return
-    try:
-        from hermes_cli.config import _sanitize_env_lines
-    except ImportError:
-        return  # early bootstrap — config module not available yet
-
     try:
         raw = path.read_bytes()
     except Exception:
@@ -440,12 +437,16 @@ def _sanitize_env_file_if_needed(path: Path) -> None:
             return
 
     try:
-        # Strip null bytes before _sanitize_env_lines so they never
+        # Strip null bytes before normalization so they never
         # reach python-dotenv (which passes them to os.environ and
         # crashes with ValueError). Also intentionally repairs
         # BOM-less UTF-16 (NUL-padded ASCII) into clean UTF-8.
         stripped = [line.replace("\x00", "") for line in original]
-        sanitized = _sanitize_env_lines(stripped)
+        sanitized = []
+        for line in stripped:
+            normalized = line.rstrip("\r\n")
+            text = normalized.strip()
+            sanitized.append((normalized if not text or text.startswith("#") else text) + "\n")
         if sanitized != original or force_utf8_rewrite:
             import tempfile
             fd, tmp = tempfile.mkstemp(

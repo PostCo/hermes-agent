@@ -470,11 +470,61 @@ class TestPersistence:
 # --------------------------------------------------------------------------
 
 class TestClientTools:
+    def test_http_helpers_send_stable_user_agent(self, monkeypatch):
+        captured = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self):
+                return b"{}"
+
+        def fake_urlopen(request, timeout):
+            captured.append((request, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr(tools.urllib.request, "urlopen", fake_urlopen)
+
+        tools._http_get_json(
+            "https://peer.example/.well-known/agent-card.json",
+            {
+                "Authorization": "Bearer secret",
+                "user-agent": "override",
+                "Accept": "text/html",
+                "a2a-version": "0.3",
+            },
+            15,
+        )
+        tools._http_post_json(
+            "https://peer.example/a2a",
+            {"jsonrpc": "2.0"},
+            {"Authorization": "Bearer secret", "User-Agent": "override"},
+            30,
+        )
+
+        assert [request.get_header("User-agent") for request, _ in captured] == [
+            "Hermes-Agent-A2A/1.0",
+            "Hermes-Agent-A2A/1.0",
+        ]
+        assert [request.get_header("Accept") for request, _ in captured] == [
+            "application/json",
+            "application/json",
+        ]
+        assert [request.get_header("A2a-version") for request, _ in captured] == [
+            protocol.PROTOCOL_VERSION,
+            protocol.PROTOCOL_VERSION,
+        ]
+        assert [timeout for _, timeout in captured] == [15, 30]
+
     def test_call_requires_args(self):
         assert "required" in tools.a2a_call({"agent": "", "message": "hi"})
         assert "required" in tools.a2a_call({"agent": "x", "message": ""})
 
-    def test_discover_requires_url(self):
+    def test_discover_requires_agent_or_url(self):
         assert "required" in tools.a2a_discover({"url": ""})
 
     def test_unknown_peer(self, monkeypatch):
@@ -493,6 +543,39 @@ class TestClientTools:
         assert "researcher" in out
         assert "search" in out
         assert "JSONRPC v1.0" in out
+
+    def test_discover_configured_peer_uses_card_url_and_auth(self, monkeypatch):
+        card_url = "http://localhost:4111/api/.well-known/tapir/agent-card.json"
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {
+            "tapir-investigator": {
+                "url": "http://localhost:4111/api/a2a/tapir",
+                "card_url": card_url,
+                "auth": {"type": "bearer", "token": "shared-secret"},
+                "timeout": 45,
+            }
+        }})
+
+        def fake_get(url, headers, timeout):
+            assert url == card_url
+            assert headers == {"Authorization": "Bearer shared-secret"}
+            assert timeout == 45
+            return protocol.build_agent_card(
+                name="tapir-investigator",
+                url="http://localhost:4111/api/a2a/tapir",
+                description="read-only support investigation",
+            )
+
+        monkeypatch.setattr(tools, "_http_get_json", fake_get)
+        out = tools.a2a_discover({"agent": "tapir-investigator"})
+        assert "Agent: tapir-investigator" in out
+        assert "URL: http://localhost:4111/api/a2a/tapir" in out
+        assert "Request auth: bearer" in out
+        assert "Card security declared: no" in out
+
+    def test_discover_reports_unknown_configured_peer(self, monkeypatch):
+        monkeypatch.setattr(tools, "_load_config", lambda: {"a2a_agents": {}})
+        out = tools.a2a_discover({"agent": "ghost"})
+        assert "unknown agent 'ghost'" in out
 
     def test_call_sends_v1_message(self, monkeypatch):
         """Outbound params: contextId inside the message, v1.0 role, no kind."""

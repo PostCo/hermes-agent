@@ -32,12 +32,12 @@ a2a_agents:
 
   # Mastra currently exposes a v1 payload with its legacy JSON-RPC method
   # names and an agent-specific discovery route.
-  tapir-support:
-    url: "http://127.0.0.1:4111/api/a2a/tapir-support"
-    card_url: "http://127.0.0.1:4111/api/.well-known/tapir-support/agent-card.json"
+  tapir-investigator:
+    url: "http://127.0.0.1:4111/api/a2a/tapir-support-investigator"
+    card_url: "http://127.0.0.1:4111/api/.well-known/tapir-support-investigator/agent-card.json"
     auth: { type: bearer, token: "${env:MASTRA_A2A_HERMES_TOKEN}" }
     method_style: mastra
-    timeout: 600
+    timeout: 1020
     capabilities: [project-tapir, code-investigation, readonly-production-data]
 ```
 
@@ -45,7 +45,7 @@ a2a_agents:
 
 The agent gets five tools:
 
-- `a2a_discover(url)` — what can this agent do?
+- `a2a_discover(agent|url)` — what can this configured or public agent do?
 - `a2a_call(agent, message, context_id?, task_id?)` — send it a task, get the
   reply. Reuse both returned IDs when continuing a task in `input-required`;
   Hermes also remembers the active task ID when only its context is supplied.

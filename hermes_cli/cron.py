@@ -368,10 +368,21 @@ def cron_create(args):
         monitor_script=getattr(args, "monitor_script", None),
         monitor_url=getattr(args, "monitor_url", None),
         continuity=getattr(args, "continuity", None),
+        enabled_toolsets=getattr(args, "enabled_toolsets", None),
     )
     if not result.get("success"):
         print(color(f"Failed to create job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1
+    if getattr(args, "paused", False):
+        paused = _cron_api(action="pause", job_id=result["job_id"])
+        if not paused.get("success"):
+            print(color(
+                f"Created job {result['job_id']}, but failed to pause it: "
+                f"{paused.get('error', 'unknown error')}",
+                Colors.RED,
+            ))
+            return 1
+        result["job"] = paused.get("job") or result.get("job", {})
     print(color(f"Created job: {result['job_id']}", Colors.GREEN))
     print(f"  Name: {result['name']}")
     print(f"  Schedule: {result['schedule']}")
@@ -390,6 +401,10 @@ def cron_create(args):
         print("  Continuity: on (each run sees the previous run's output)")
     if job_data.get("workdir"):
         print(f"  Workdir: {job_data['workdir']}")
+    if job_data.get("enabled_toolsets"):
+        print(f"  Toolsets: {', '.join(job_data['enabled_toolsets'])}")
+    if not job_data.get("enabled", True):
+        print("  State: paused")
     print(f"  Next run: {result['next_run_at']}")
     _warn_if_gateway_not_running()
     return 0
@@ -425,6 +440,10 @@ def cron_edit(args):
             if skill not in final_skills:
                 final_skills.append(skill)
 
+    enabled_toolsets = getattr(args, "enabled_toolsets", None)
+    if getattr(args, "clear_toolsets", False):
+        enabled_toolsets = []
+
     result = _cron_api(
         action="update",
         job_id=args.job_id,
@@ -442,6 +461,7 @@ def cron_edit(args):
         monitor_script=getattr(args, "monitor_script", None),
         monitor_url=getattr(args, "monitor_url", None),
         continuity=getattr(args, "continuity", None),
+        enabled_toolsets=enabled_toolsets,
     )
     if not result.get("success"):
         print(color(f"Failed to update job: {result.get('error', 'unknown error')}", Colors.RED))
@@ -467,6 +487,10 @@ def cron_edit(args):
         print("  Continuity: on (each run sees the previous run's output)")
     if updated.get("workdir"):
         print(f"  Workdir: {updated['workdir']}")
+    if updated.get("enabled_toolsets"):
+        print(f"  Toolsets: {', '.join(updated['enabled_toolsets'])}")
+    else:
+        print("  Toolsets: unrestricted")
     return 0
 
 

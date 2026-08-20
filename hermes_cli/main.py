@@ -567,6 +567,33 @@ def _apply_profile_override() -> None:
             return None
         return None
 
+    def _resolve_profile_env_early(name: str) -> str:
+        """Resolve a profile without importing the heavyweight profiles module.
+
+        Importing ``hermes_cli.profiles`` pulls agent/config modules before the
+        selected profile's dotenv has loaded. Config interpolation then emits
+        false missing-variable warnings and can briefly cache unresolved
+        values. Keep this pre-parser stdlib-only so HERMES_HOME is established
+        before any profile configuration is imported.
+        """
+        env_home = os.environ.get("HERMES_HOME", "").strip()
+        if env_home:
+            env_path = Path(env_home)
+            root = env_path.parent.parent if env_path.parent.name == "profiles" else env_path
+        else:
+            from hermes_constants import get_default_hermes_root
+
+            root = get_default_hermes_root()
+        if name == "default":
+            return str(root)
+        candidate = root / "profiles" / name
+        if not candidate.is_dir():
+            raise FileNotFoundError(
+                f"Profile '{name}' does not exist. Create it with: "
+                f"hermes profile create {name}"
+            )
+        return str(candidate)
+
     # 1. Check for explicit -p / --profile flag. Historically this worked even
     # after the subcommand (`hermes chat -p coder`), so keep scanning broadly.
     # The exception is command-argv passthrough regions such as `mcp add --args`.
@@ -664,9 +691,11 @@ def _apply_profile_override() -> None:
     # 3. If we found a profile, resolve and set HERMES_HOME
     if profile_name is not None:
         try:
-            from hermes_cli.profiles import resolve_profile_env
+            import re as _re
 
-            hermes_home = resolve_profile_env(profile_name)
+            if not _re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", profile_name):
+                raise ValueError(f"Invalid profile name: {profile_name!r}")
+            hermes_home = _resolve_profile_env_early(profile_name)
         except FileNotFoundError as exc:
             hermes_home = _resolve_sudo_user_profile_env(profile_name)
             if not hermes_home:
@@ -691,9 +720,9 @@ def _apply_profile_override() -> None:
 
 _apply_profile_override()
 
-# Load .env from ~/.hermes/.env first, then project root as dev fallback.
-# User-managed env files should override stale shell exports on restart.
-from hermes_cli.config import get_hermes_home
+# Load the selected profile's .env before importing config. Config values may
+# contain `${env:...}` references; importing config first resolves them against
+# an empty process environment and emits false missing-variable warnings.
 from hermes_cli.env_loader import load_hermes_dotenv
 
 # Updating dependencies must not import optional secret-manager libraries into
@@ -704,9 +733,12 @@ from hermes_cli.env_loader import load_hermes_dotenv
 # the authoritative argparse subcommand.  Dotenv/managed config still loads;
 # only external secret fetches are unnecessary for installation maintenance.
 load_hermes_dotenv(
+    hermes_home=os.getenv("HERMES_HOME", str(Path.home() / ".hermes")),
     project_env=PROJECT_ROOT / ".env",
     load_external_secrets=sys.argv[1:2] != ["update"],
 )
+
+from hermes_cli.config import get_hermes_home
 
 # Bridge security.redact_secrets from config.yaml → HERMES_REDACT_SECRETS env
 # var BEFORE hermes_logging imports agent.redact (which snapshots the flag at
